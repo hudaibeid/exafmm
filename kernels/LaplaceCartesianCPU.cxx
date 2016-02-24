@@ -658,7 +658,8 @@ namespace exafmm {
       }
     }
 
-    void M2L(C_iter Ci, C_iter Cj, bool mutual) {
+		template <typename J_iter>
+		void M2L(C_iter Ci, J_iter Cj, bool mutual) {
       vec3 dX = Ci->X - Cj->X - Xperiodic;
       real_t invR2 = 1 / norm(dX);
 #if EXAFMM_MASS
@@ -674,6 +675,8 @@ namespace exafmm {
 	sumM2L<P-1>(Cj->L, C, Ci->M);
       }
     }
+    template void M2L<C_iter>(C_iter Ci,C_iter Cj, bool mutual);
+		template void M2L<M_iter>(C_iter Ci,M_iter Cj, bool mutual);
 
     void L2L(C_iter Ci, C_iter Ci0) {
       C_iter Cj = Ci0 + Ci->IPARENT;

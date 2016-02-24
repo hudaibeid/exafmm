@@ -7,8 +7,8 @@ namespace exafmm {
   namespace kernel {
     real_t eps2;
     vec3 Xperiodic;
-
-    void P2P(C_iter Ci, C_iter Cj, bool mutual) {
+		template <typename J_iter>
+    void P2P(C_iter Ci, J_iter Cj, bool mutual) {
       B_iter Bi = Ci->BODY;
       B_iter Bj = Cj->BODY;
       int ni = Ci->NBODY;
@@ -201,3 +201,5 @@ namespace exafmm {
     }
   }
 }
+template void exafmm::kernel::P2P<exafmm::C_iter>(exafmm::C_iter Ci, exafmm::C_iter Cj, bool mutual);
+template void exafmm::kernel::P2P<exafmm::M_iter>(exafmm::C_iter Ci, exafmm::M_iter Cj, bool mutual);

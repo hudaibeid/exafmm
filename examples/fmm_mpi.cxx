@@ -1,155 +1,115 @@
 #include "base_mpi.h"
 #include "args.h"
 #include "bound_box.h"
-#include "build_tree.h"
 #include "dataset.h"
 #include "logger.h"
-#include "partition.h"
-#include "traversal.h"
-#include "tree_mpi.h"
 #include "up_down_pass.h"
 #include "verify.h"
+#include "hilbert_wrapper.h"
+#include "hot_partitioner.h"
+#include "traversal.h"
+#include "build_tree_tbb.h"
+#include "hot_mpi.h"
+
+#define DIRECT 1
+
+
 using namespace exafmm;
+using namespace std;
+
+
+#if SEND_MULTIPOLES
+typedef HOTMPI<Bodies,Multipoles> BasicMPI;
+#else 
+typedef HOTMPI<Bodies,Cells> BasicMPI;
+#endif
+typedef Traversal<BasicMPI> TreeTraversal;
+
 
 int main(int argc, char ** argv) {
+  const real_t eps2 = 0.0;
   const real_t cycle = 2 * M_PI;
   Args args(argc, argv);
-  BaseMPI baseMPI;
-  Bodies bodies, bodies2, jbodies, gbodies, buffer;
-  BoundBox boundBox(args.nspawn);
-  Bounds localBounds, globalBounds;
-  BuildTree localTree(args.ncrit, args.nspawn);
-  BuildTree globalTree(1, args.nspawn);
-  Cells cells, jcells, gcells;
   Dataset data;
-  Partition partition(baseMPI.mpirank, baseMPI.mpisize);
-  Traversal traversal(args.nspawn, args.images);
-  TreeMPI treeMPI(baseMPI.mpirank, baseMPI.mpisize, args.images);
-  UpDownPass upDownPass(args.theta, args.useRmax, args.useRopt);
+  BaseMPI baseMPI;
   Verify verify;
-  num_threads(args.threads);
-
+  BoundBox boundBox(args.nspawn);  
+  int rank = baseMPI.mpirank;
+  int size = baseMPI.mpisize;  
+  args.verbose &= rank == 0;
+  args.numBodies /= baseMPI.mpisize;  
+  logger::verbose = args.verbose;
+  logger::printTitle("FMM Parameters"); 
+  args.print(logger::stringLength, P, std::cout);  
+  double commtime = 0.0;
+  num_threads(args.threads);  
+  Cells cells,jcells;
+  Bodies jbodies;
   kernel::eps2 = 0.0;
 #if EXAFMM_HELMHOLTZ
   kernel::wavek = complex_t(10.,1.) / real_t(2 * M_PI);
 #endif
   kernel::setup();
-  //args.numBodies /= baseMPI.mpisize;
-  args.verbose &= baseMPI.mpirank == 0;
-  logger::verbose = args.verbose;
-  logger::printTitle("FMM Parameters");
-  args.print(logger::stringLength, P);
-  bodies = data.initBodies(args.numBodies, args.distribution, baseMPI.mpirank, baseMPI.mpisize);
-  buffer.reserve(bodies.size());
-  if (args.IneJ) {
-    for (B_iter B=bodies.begin(); B!=bodies.end(); B++) {
-      B->X[0] += M_PI;
-      B->X[0] *= 0.5;
-    }
-    jbodies = data.initBodies(args.numBodies, args.distribution, baseMPI.mpirank+baseMPI.mpisize, baseMPI.mpisize);
-    for (B_iter B=jbodies.begin(); B!=jbodies.end(); B++) {
-      B->X[0] -= M_PI;
-      B->X[0] *= 0.5;
-    }
-  }
+  auto&& bodies = data.initBodies(args.numBodies, args.distribution,rank, size); 
   for (int t=0; t<args.repeat; t++) {
     logger::printTitle("FMM Profiling");
-    logger::startTimer("Total FMM");
-    logger::startPAPI();
-    localBounds = boundBox.getBounds(bodies);
-    if (args.IneJ) {
-      localBounds = boundBox.getBounds(jbodies, localBounds);
+    logger::startTimer("Total FMM");    
+    auto&& localBounds  = boundBox.getBounds(bodies);
+    auto&& globalBounds = baseMPI.allreduceBounds(localBounds);
+    uint32_t depth; 
+    auto&& hilbertBounds = generateHilbertKey(bodies,globalBounds,depth);         
+    BasicMPI* hotMPI = new BasicMPI(rank, size, depth,args.grain);    
+    auto&& globalHilbertBounds = hotMPI->allReduceHilbertBounds(hilbertBounds);  
+    HOTPartition partitioner(hilbertBounds,globalHilbertBounds,rank,size,args.numBodies);
+    logger::stopTimer("Total FMM",0);    
+    logger::startTimer("Partition");
+    logger::startTimer("Load-balance");
+    if(args.balance == 0 || t == 0) {
+      logger::stopTimer("Load-balance",0);
+      partitioner.partitionSort(bodies);
+      bodies = hotMPI->asyncGlobalCommunication(bodies,1,false);
+      logger::stopTimer("Partition");
     }
-    globalBounds = baseMPI.allreduceBounds(localBounds);
-    partition.bisection(bodies, globalBounds);
-    bodies = treeMPI.commBodies(bodies);
-    if (args.IneJ) {
-      partition.bisection(jbodies, globalBounds);
-      jbodies = treeMPI.commBodies(jbodies);
+    if(args.balance != 0 && t > 0) {
+      logger::stopTimer("Partition",0);      
+      partitioner.migrateWork(bodies);
+      bodies = hotMPI->asyncGlobalCommunication(bodies,1,false);
+      logger::stopTimer("Load-balance");
     }
+    logger::startTimer("Total FMM");  
     localBounds = boundBox.getBounds(bodies);
-    cells = localTree.buildTree(bodies, buffer, localBounds);
+    BuildTree buildTree(args.ncrit,depth);
+    cells = buildTree(bodies,localBounds);  
     localBounds = boundBox.getBounds(cells, localBounds);
+    UpDownPass upDownPass(args.theta, args.useRmax, false);
     upDownPass.upwardPass(cells);
-    if (args.IneJ) {
-      localBounds = boundBox.getBounds(jbodies);
-      jcells = localTree.buildTree(jbodies, buffer, localBounds);
-      localBounds = boundBox.getBounds(jcells, localBounds);
-      upDownPass.upwardPass(jcells);
-    }
+    TreeTraversal traversal(args.nspawn, 0, hotMPI);    
+    traversal.traverse(cells, cells, cycle, true, args.mutual);
+    traversal.dualTreeTraversalRemote(cells,rank,size,BuildTree::indexer,upDownPass);        
 
-#if 1 // Set to 0 for debugging by shifting bodies and reconstructing tree
-    treeMPI.allgatherBounds(localBounds);
-    if (args.IneJ) {
-      treeMPI.setLET(jcells, cycle);
-    } else {
-      treeMPI.setLET(cells, cycle);
-    }
-#pragma omp parallel sections
-    {
-#pragma omp section
-      {
-	treeMPI.commBodies();
-	treeMPI.commCells();
-      }
-#pragma omp section
-      {
-	traversal.initListCount(cells);
-	traversal.initWeight(cells);
-	if (args.IneJ) {
-	  traversal.traverse(cells, jcells, cycle, args.dual, false);
-	} else {
-	  traversal.traverse(cells, cells, cycle, args.dual, args.mutual);
-	  jbodies = bodies;
-	}
-      }
-    }
-    if (baseMPI.mpisize > 1) {
-      if (args.graft) {
-	treeMPI.linkLET();
-	gbodies = treeMPI.root2body();
-	jcells = globalTree.buildTree(gbodies, buffer, globalBounds);
-	treeMPI.attachRoot(jcells);
-	traversal.traverse(cells, jcells, cycle, args.dual, false);
-      } else {
-	for (int irank=0; irank<baseMPI.mpisize; irank++) {
-	  treeMPI.getLET(jcells, (baseMPI.mpirank+irank)%baseMPI.mpisize);
-	  traversal.traverse(cells, jcells, cycle, args.dual, false);
-	}
-      }
-    }
-#else
-    jbodies = bodies;
-    for (int irank=0; irank<baseMPI.mpisize; irank++) {
-      treeMPI.shiftBodies(jbodies);
-      jcells.clear();
-      localBounds = boundBox.getBounds(jbodies);
-      jcells = localTree.buildTree(jbodies, buffer, localBounds);
-      upDownPass.upwardPass(jcells);
-      traversal.traverse(cells, jcells, cycle, args.dual, args.mutual);
-    }
+#if CALC_COM_COMP
+    logger::printTime("Communication");
 #endif
-    upDownPass.downwardPass(cells);
-
-    logger::stopPAPI();
-    logger::stopTimer("Total FMM", 0);
+#if DIRECT
+    Bodies buffer;
+    if(args.repeat > 1) buffer.assign(bodies.begin(),bodies.end());
     logger::printTitle("MPI direct sum");
+    jbodies = Bodies(bodies.begin(),bodies.end());
     const int numTargets = 100;
-    buffer = bodies;
     data.sampleBodies(bodies, numTargets);
-    bodies2 = bodies;
+    Bodies bodies2(bodies.begin(),bodies.end());
     data.initTarget(bodies);
     logger::startTimer("Total Direct");
     for (int i=0; i<baseMPI.mpisize; i++) {
-      if (args.verbose) std::cout << "Direct loop          : " << i+1 << "/" << baseMPI.mpisize << std::endl;
-      treeMPI.shiftBodies(jbodies);
-      traversal.direct(bodies, jbodies, cycle);
+      if (args.verbose) std::cout << "Direct loop          : " << i+1 << "/" << baseMPI.mpisize << std::endl;      
+      hotMPI->shiftBodies(jbodies);      
+      traversal.direct(bodies, jbodies, cycle);      
     }
     traversal.normalize(bodies);
     logger::printTitle("Total runtime");
     logger::printTime("Total FMM");
     logger::stopTimer("Total Direct");
-    logger::resetTimer("Total Direct");
+    logger::resetTimer("Total Direct");    
     double potDif = verify.getDifScalar(bodies, bodies2);
     double potNrm = verify.getNrmScalar(bodies);
     double accDif = verify.getDifVector(bodies, bodies2);
@@ -159,19 +119,68 @@ int main(int argc, char ** argv) {
     MPI_Reduce(&potNrm, &potNrmGlob, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&accDif, &accDifGlob, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&accNrm, &accNrmGlob, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    logger::printTitle("FMM vs. direct");
-    verify.print("Rel. L2 Error (pot)",std::sqrt(potDifGlob/potNrmGlob));
-    verify.print("Rel. L2 Error (acc)",std::sqrt(accDifGlob/accNrmGlob));
-    localTree.printTreeData(cells);
-    traversal.printTraversalData();
-    logger::printPAPI();
-    bodies = buffer;
-    data.initTarget(bodies);
-    logger::resetTimer("Total FMM");
-    if (args.write) {
-      logger::writeTime(baseMPI.mpirank);
+    if(rank == 0) {
+      logger::printTitle("FMM vs. direct");
+      verify.print("Rel. L2 Error (pot)",std::sqrt(potDifGlob/potNrmGlob));
+      verify.print("Rel. L2 Error (acc)",std::sqrt(accDifGlob/accNrmGlob));
     }
-    traversal.writeList(cells, baseMPI.mpirank);
+    if(args.repeat > 1) { 
+      traversal.printTraversalData();
+      bodies = buffer;
+      data.initTarget(bodies);   
+    } else {
+      traversal.printTraversalData();
+    } 
+
+#else 
+      traversal.printTraversalData();      
+      if(args.repeat > 1) data.initTarget(bodies); 
+#endif  
+#if CALC_COM_COMP    
+    commtime = logger::getTime("Communication");
+#endif
+
+#if WRITE_TIME              
+    logger::writeTime(rank);
+#endif
+    logger::zeroTimer("Traverse Remote");
+    logger::zeroTimer("Total FMM");
+    logger::zeroTimer("Traverse");
+#if CALC_COM_COMP    
+    logger::zeroTimer("Communication");
+#endif    
+    logger::zeroTimer("Partition");
+    logger::zeroTimer("Load-balance");
+    buildTree.printTreeData(cells);
   }
-  return 0;
+
+  if(rank == 0) {
+    std::ofstream configFile("config.dat");                 // Open list log file
+    args.print(logger::stringLength, P, configFile);  
+    logger::logFixed("Communication Size",size,configFile);
+#if HILBERT_CODE
+    configFile<<"using Hilbert partitioning"<<std::endl;
+#else 
+    configFile<<"using Morton partitioning"<<std::endl;
+#endif    
+#if WEIGH_COM
+    configFile<<"using communication & workload for balancing"<<std::endl;
+#else
+    configFile<<"using workload only for balancing"<<std::endl;
+#endif
+#if CALC_COM_COMP   
+    configFile<<"calculating communication time"<<std::endl;        
+#endif    
+#if USE_WEIGHT
+    configFile<<"using weights for partitioning"<<std::endl;        
+#else
+    configFile<<"not using weights for partitioning"<<std::endl;        
+#endif    
+#if COUNT_KERNEL
+    configFile<<"using counting kernel"<<std::endl;            
+#else
+    configFile<<"not using counting kernel"<<std::endl;        
+#endif    
+    configFile.close();
+  }
 }
