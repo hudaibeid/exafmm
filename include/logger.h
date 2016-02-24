@@ -134,6 +134,19 @@ namespace exafmm {
       timer.clear();                                            // Clear timer
     }
 
+    //! set timer value to 0
+	  inline void zeroTimer(std::string event) {    
+	    timer[event] = 0.0;    
+	  }
+
+	  template<typename T, typename File>
+	  void logFixed(char const* event, T&& count, File&& file=std::cout) {
+	    file<< std::setw(logger::stringLength) << std::left  //  Set format
+	    << event << " "                                 //  Print title
+	    << std::setprecision(0) << std::fixed           //  Set format
+	    << count << std::endl;                          //  Print count
+	  }
+
     //! Start PAPI event
     inline void startPAPI() {
 #if EXAFMM_USE_PAPI

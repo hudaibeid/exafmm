@@ -10,6 +10,9 @@
 #include <stdint.h>
 #include <vector>
 #include "vec.h"
+#include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace exafmm {
   // Basic type definitions
@@ -96,34 +99,49 @@ namespace exafmm {
 #endif
   };
 #if _SX
-  typedef std::vector<Body> Bodies;                             //!< Vector of bodies
+  typedef std::vector<Body> Bodies;                     			  //!< Vector of bodies
 #else 
   typedef AlignedAllocator<Body,SIMD_BYTES> BodyAllocator;      //!< Body alignment allocator
-  typedef std::vector<Body,BodyAllocator> Bodies;               //!< Vector of bodies
+  typedef std::vector<Body,BodyAllocator> Bodies;        				//!< Vector of bodies
 #endif
   typedef Bodies::iterator B_iter;                              //!< Iterator of body vector
 
   //! Structure of cells
-  struct Cell {
+  struct Multipole {
+  	uint16_t  LEVEL;                                            //!< Level at which cell is located
     int      IPARENT;                                           //!< Index of parent cell
     int      ICHILD;                                            //!< Index of first child cell
     int      NCHILD;                                            //!< Number of child cells
-    int      IBODY;                                             //!< Index of first body
     int      NBODY;                                             //!< Number of descendant bodies
-#if EXAFMM_COUNT_LIST
-    int      numP2P;                                            //!< Size of P2P interaction list per cell
-    int      numM2L;                                            //!< Size of M2L interaction list per cell
-#endif
     B_iter   BODY;                                              //!< Iterator of first body
     uint64_t ICELL;                                             //!< Cell index
-    real_t   WEIGHT;                                            //!< Weight for partitioning
     real_t   SCALE;                                             //!< Scale for Helmholtz kernel
     vec3     X;                                                 //!< Cell center
     real_t   R;                                                 //!< Cell radius
-    vecP     M;                                                 //!< Multipole coefficients
-    vecP     L;                                                 //!< Local coefficients
+    vecP     M;                                                 //!< Multipole coefficients 
+    vecP      L;                                                //!< Local coefficients   
   };
-  typedef std::vector<Cell> Cells;                              //!< Vector of cells
-  typedef Cells::iterator   C_iter;                             //!< Iterator of cell vector
+
+  //! Structure of cells
+	struct Cell : public Multipole {  
+	  int       IBODY;                                            //!< Index of first body
+#if EXAFMM_COUNT_LIST
+    int      numP2P;                                         	  //!< Size of P2P interaction list per cell
+    int      numM2L;                                            //!< Size of M2L interaction list per cell
+#endif
+	  real_t    WEIGHT;                                           //!< Weight for partitioning
+	  //std::vector<uint32_t> interactionList;
+	};
+
+  typedef std::vector<Cell> Cells;                    			   //!< Vector of cells
+  typedef Cells::iterator C_iter;  	                           //!< Iterator of cell vector
+  typedef std::vector<Multipole> Multipoles;             			 //!< Vector of multipoles
+  typedef Multipoles::iterator M_iter;                         //!< Iterator of multipole vector
+
+	typedef uint64_t hilbert_t;                                  //!< Type of Hilbert orders
+	typedef std::array<uint32_t,3> hilbert_arr;                  //!< Type of Hilbert array 
+	typedef std::unordered_map<uint64_t, size_t> TreeLevelMap;   //!< Tree Level type
+	typedef std::unordered_map<size_t,TreeLevelMap> TreeType;    //!< Level Indexer
+	typedef std::map<Cell*,std::pair<size_t,size_t>> CellMap;    //!<maps cells to number of shifts
 }
 #endif
