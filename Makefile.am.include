@@ -1,5 +1,7 @@
 ### Base flags
 AM_CPPFLAGS = -I../include
+#AM_CPPFLAGS += -DSEND_MULTIPOLES
+
 if EXAFMM_HAVE_BG
 AM_CXXFLAGS = -qarch=qp -qtune=qp -O3 -qhot
 AM_FCFLAGS = -qarch=qp -qtune=qp -O3 -qhot
@@ -89,6 +91,7 @@ endif
 endif
 endif
 endif
+
 
 # OpenMPI needs an extra library when linking with Fortran
 if EXAFMM_HAVE_MPI

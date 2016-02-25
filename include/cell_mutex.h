@@ -115,6 +115,10 @@ public:
 };
 size_t CellCounter::cellQueue = 0;
 
+
+
+
+
 #if SEND_MULTIPOLES
 
 template <typename CellVec>
@@ -130,6 +134,7 @@ inline Multipoles getMultipoles(CellVec const& cells) {
 		multipoles[i].R = cells[i].R;
 		multipoles[i].LEVEL = cells[i].LEVEL;
 		multipoles[i].NBODY = cells[i].NBODY;
+		multipoles[i].SCALE = cells[i].SCALE;
 
 	}	
 	return multipoles;
@@ -149,18 +154,20 @@ inline Multipoles getMultipoles(Iter const& begin, Iter const& end) {
 		multipoles[i].R = current->R;
 		multipoles[i].LEVEL = current->LEVEL;
 		multipoles[i].NBODY = current->NBODY;
+		multipoles[i].SCALE = current->SCALE;
 	}	
 	return multipoles;
 }
 #if DFS
-template <typename Iter, typename GrainType>
-inline void updateChildMultipoles(Multipoles& multipoles, Iter const& C0, Cell const& C, GrainType const& grainSize) {
+template <typename VecType, typename Iter, typename GrainType>
+inline void updateChildMultipoles(VecType& multipoles, Iter const& C0, Cell const& C, GrainType const& grainSize, size_t& index) {
 	auto&& begin = C0 + C.ICHILD;
   auto&& end   = C0 + C.ICHILD + C.NCHILD;
+  typedef typename VecType::value_type val_type;
 	size_t const& size = C.NCHILD;
 	for (size_t i = 0; i < size; ++i) {	
 		auto&& current =  begin + i;
-		Multipole m;
+		val_type m;
 		m.X 		= current->X;
 		m.M 		= current->M;
 		m.ICELL = current->ICELL;
@@ -168,27 +175,30 @@ inline void updateChildMultipoles(Multipoles& multipoles, Iter const& C0, Cell c
 		m.R = current->R;				
 		m.LEVEL = current->LEVEL;
 		m.NBODY = current->NBODY;	
+		m.SCALE = current->SCALE;	
 		multipoles.push_back(m);
+		index++;
 	}	
 	for(auto&& cc = begin; cc<end; ++cc) 
-		if(multipoles.size() < grainSize) updateChildMultipoles(multipoles,C0,*cc,grainSize);				
+		if(index < grainSize) updateChildMultipoles(multipoles,C0,*cc,grainSize,index);				
 }
 #else
-template <typename Iter, typename GrainType>
-inline void updateChildMultipoles(Multipoles& multipoles, Iter const& C0, Cell const& root, GrainType const& grainSize) {		
+template <typename VecType, typename Iter, typename GrainType>
+inline void updateChildMultipoles(VecType& multipoles, Iter const& C0, Cell const& root, GrainType const& grainSize, size_t& index) {		
 	std::queue<Cell> cell_queue;
-	auto&& begin = C0 + root.ICHILD;  
+	auto begin = C0 + root.ICHILD;  
 	auto size = root.NCHILD;
 	for (size_t i = 0; i < size; ++i) {							
 	  auto&& current =  begin + i;	  
 		cell_queue.push(*current);				
 	}	
+	typedef typename VecType::value_type val_type;
 	while(cell_queue.size() > 0) {
-		auto&& C = cell_queue.front();
+		auto C = cell_queue.front();
 		cell_queue.pop();
 		begin = C0 + C.ICHILD;  	
 		size = C.NCHILD;		
-		Multipole m;
+		val_type m;
 		m.X 		= C.X;
 		m.M 		= C.M;
 		m.ICELL = C.ICELL;
@@ -196,10 +206,12 @@ inline void updateChildMultipoles(Multipoles& multipoles, Iter const& C0, Cell c
 		m.R = C.R;				
 		m.LEVEL = C.LEVEL;
 		m.NBODY = C.NBODY;				
-		m.ICHILD = multipoles.size();
+		m.SCALE = C.SCALE;			
+		m.ICHILD = index;
 		m.IPARENT = C.IPARENT;
-		multipoles.push_back(m);		
-		if(multipoles.size() < grainSize) {
+		multipoles.push_back(m);	
+		index++;
+		if(index < grainSize) {
 			for (size_t i = 0; i < size; ++i) {							
 			  auto&& current =  begin + i;			  
 				cell_queue.push(*current);	

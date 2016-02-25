@@ -120,16 +120,16 @@ namespace exafmm {
     real_t   R;                                                 //!< Cell radius
     vecP     M;                                                 //!< Multipole coefficients 
     vecP      L;                                                //!< Local coefficients   
-  };
-
-  //! Structure of cells
-	struct Cell : public Multipole {  
 	  int       IBODY;                                            //!< Index of first body
 #if EXAFMM_COUNT_LIST
     int      numP2P;                                         	  //!< Size of P2P interaction list per cell
     int      numM2L;                                            //!< Size of M2L interaction list per cell
 #endif
 	  real_t    WEIGHT;                                           //!< Weight for partitioning
+  };
+
+  //! Structure of cells
+	struct Cell : public Multipole {  
 	  //std::vector<uint32_t> interactionList;
 	};
 

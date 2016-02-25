@@ -4,6 +4,7 @@
 #include <thread>
 #include "logger.h"
 #include "cell_mutex.h"
+#include "lightweight_vector.h"
 #define INTERNAL_THREADING 0
 template <typename CellVec, typename HOT>
 class DispatcherWrapper  {
@@ -19,10 +20,12 @@ class DispatcherWrapper  {
     int terminated;
     iter_type begin;
     size_t hitCount; 
+    size_t index;
+    lightweight_vector<Multipole> sendingBuffer;     
 
   public:    
     CellDispatcher(int _rank, int _size, TaskTrigger _taskRunning, CellVec const& _cells, HOT const& _hot, uint64_t _timeout)
-      :rank(_rank),size(_size),trigger(_taskRunning),cells(_cells),hot(_hot), timeout(_timeout), terminated(0), begin(_cells.begin()), hitCount(0){ }    
+      :rank(_rank),size(_size),trigger(_taskRunning),cells(_cells),hot(_hot), timeout(_timeout), terminated(0), begin(_cells.begin()), hitCount(0),index(0){ }    
     
     void operator()() {     
       int ready; 
@@ -33,7 +36,8 @@ class DispatcherWrapper  {
         if(ready) {
           tryReceive(status.MPI_TAG, status.MPI_SOURCE);          
         }
-      }      
+      }
+      logger::logFixed("hit count", hitCount, std::cout);      
     }
 
     inline bool tryReceive(int tag, int source) {
@@ -64,12 +68,15 @@ class DispatcherWrapper  {
             return true;                               
           } else if (msgType == CHILDCELLTAG && cell.NCHILD > 0) {
             auto grainSize = getGrainSize(tag);
-#if SEND_MULTIPOLES            
-            Multipoles multipoles;            
-            updateChildMultipoles(multipoles,begin, cell,grainSize);            
-            MPI_Send(RAWPTR(multipoles),  MULTIPOLEWORD*multipoles.size(),MPI_INT,source,tag,MPI_COMM_WORLD);
+#if SEND_MULTIPOLES
+            size_t sendingSize = 0;
+            updateChildMultipoles(sendingBuffer,begin, cell,grainSize,sendingSize);            
+            MPI_Isend(&sendingBuffer[index],  MULTIPOLEWORD*sendingSize,MPI_INT,source,tag,MPI_COMM_WORLD,&request);
+            index += sendingSize;            
+            // assuming MPI will deallocate sendingBuffer[0]
+            //delete[] sendingBuffer;
 #else
-            MPI_Isend(&cells[cell.ICHILD],      CELLWORD*cell.NCHILD,MPI_INT,source,tag,MPI_COMM_WORLD,&request);
+            MPI_Isend(&cells[cell.ICHILD],      CELLWORD*cell.NCHILD,MPI_INT,source,tag,MPI_COMM_WORLD,&request);            
 #endif             
             return true;
           } else if(msgType == BODYTAG && cell.NBODY > 0) {
