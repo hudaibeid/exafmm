@@ -118,8 +118,10 @@ private:
 			return "octant";
 		case 'p':
 			return "plummer";
-		case 's':
-			return "sphere";
+		case 's':		
+			return "sphere";			
+		case 'b':
+			return "boundary";
 		default:
 			fprintf(stderr, "invalid distribution %s\n", arg);
 			exit(0);

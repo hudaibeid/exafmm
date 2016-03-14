@@ -641,7 +641,10 @@ public:
 		kernel::Xperiodic = 0;
 		communicator->initDispatcher(icells, indexer);
 		logger::initTracer();                                       // Initialize tracer
-		Ci0 = icells.begin();                                       // Set iterator of target root cell		
+		Ci0 = icells.begin();                                       // Set iterator of target root cell	
+#pragma omp parallel 
+{ 
+		#pragma omp for	
 		for (int i = 0; i < mpisize; ++i) {
 			if (i != mpirank) {
 				double commtime;
@@ -653,6 +656,7 @@ public:
 				logger::stopTimer("Clear cache", 0);                            // Start timer
 			}
 		}
+}
 		updownPass.downwardPass(icells);
 		logger::printTime("Clear cache");
 		logger::stopTimer("Traverse Remote");                              // Stop timer

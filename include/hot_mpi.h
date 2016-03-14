@@ -331,7 +331,6 @@ public:
       int recvRank = rank;
       int receivedTag;      
       TOGGLEDIRECTION(tag)
-
       int ready = 0;
       while(!ready) {
         MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,MPI_COMM_WORLD,&ready,&status); 
